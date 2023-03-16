@@ -21,7 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#define IC_BUFFER_SIZE 20
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -41,20 +41,26 @@ uint32_t MotorSetDuty = 0;
 
 /* Private variables ---------------------------------------------------------*/
 TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim5;
+DMA_HandleTypeDef hdma_tim5_ch1;
 
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-
+uint32_t InputCaptureBuffer[IC_BUFFER_SIZE];
+float averageRisingedgePeriod;
+float MotorReadRPM;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_TIM2_Init(void);
+static void MX_TIM5_Init(void);
 /* USER CODE BEGIN PFP */
-
+float IC_Calc_Period();
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -90,9 +96,14 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_USART2_UART_Init();
   MX_TIM2_Init();
+  MX_TIM5_Init();
   /* USER CODE BEGIN 2 */
+  HAL_TIM_Base_Start(&htim5);
+  HAL_TIM_IC_Start_DMA(&htim5, TIM_CHANNEL_1, InputCaptureBuffer,20);
+
 HAL_TIM_Base_Start(&htim2);
 HAL_TIM_PWM_Start(&htim2, MotorSetDuty);
   /* USER CODE END 2 */
@@ -101,10 +112,18 @@ HAL_TIM_PWM_Start(&htim2, MotorSetDuty);
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	  averageRisingedgePeriod = IC_Calc_Period();
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  __HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,MotorSetDuty); //1
+	  static uint32_t timestamp =0;
+	 	  if(HAL_GetTick()>= timestamp)
+	 	  {
+	 		  timestamp = HAL_GetTick()+500;
+//	 		  averageRisingedgePeriod = IC_Calc_Period();
+	 		  MotorReadRPM = 60/(averageRisingedgePeriod*12*64); //2
+	 		  __HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,MotorSetDuty); //1
+	 	  }
   }
   /* USER CODE END 3 */
 }
@@ -215,6 +234,64 @@ static void MX_TIM2_Init(void)
 }
 
 /**
+  * @brief TIM5 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM5_Init(void)
+{
+
+  /* USER CODE BEGIN TIM5_Init 0 */
+
+  /* USER CODE END TIM5_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_IC_InitTypeDef sConfigIC = {0};
+
+  /* USER CODE BEGIN TIM5_Init 1 */
+
+  /* USER CODE END TIM5_Init 1 */
+  htim5.Instance = TIM5;
+  htim5.Init.Prescaler = 83;
+  htim5.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim5.Init.Period = 4294967295;
+  htim5.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim5.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim5) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim5, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_IC_Init(&htim5) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim5, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
+  sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
+  sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
+  sConfigIC.ICFilter = 0;
+  if (HAL_TIM_IC_ConfigChannel(&htim5, &sConfigIC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM5_Init 2 */
+
+  /* USER CODE END TIM5_Init 2 */
+
+}
+
+/**
   * @brief USART2 Initialization Function
   * @param None
   * @retval None
@@ -244,6 +321,22 @@ static void MX_USART2_UART_Init(void)
   /* USER CODE BEGIN USART2_Init 2 */
 
   /* USER CODE END USART2_Init 2 */
+
+}
+
+/**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Stream2_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream2_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream2_IRQn);
 
 }
 
@@ -281,7 +374,21 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+float IC_Calc_Period()
+{
+	uint32_t currentDMAPointer = IC_BUFFER_SIZE - __HAL_DMA_GET_COUNTER(htim5.hdma[1]);
+	uint32_t lastVaildDMAPointer = (currentDMAPointer-1 + IC_BUFFER_SIZE)% IC_BUFFER_SIZE;
+	uint32_t i = (lastVaildDMAPointer + IC_BUFFER_SIZE -5) % IC_BUFFER_SIZE;
 
+	int32_t sumdiff=0;
+	while (i != lastVaildDMAPointer){
+		uint32_t fristCapture = InputCaptureBuffer[i];
+		uint32_t NextCapture = InputCaptureBuffer[(i+1)%IC_BUFFER_SIZE];
+		sumdiff += NextCapture-fristCapture;
+		i = (i+1)%IC_BUFFER_SIZE;
+	}
+	return (sumdiff/5.0)/1000000;
+}
 /* USER CODE END 4 */
 
 /**
