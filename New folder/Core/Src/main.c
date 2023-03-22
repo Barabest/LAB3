@@ -32,6 +32,8 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 uint32_t MotorSetDuty = 0;
+uint32_t MotorSetRPM=0;
+uint32_t MotorControlEnable=0;
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -105,7 +107,7 @@ int main(void)
   HAL_TIM_IC_Start_DMA(&htim5, TIM_CHANNEL_1, InputCaptureBuffer,20);
 
 HAL_TIM_Base_Start(&htim2);
-HAL_TIM_PWM_Start(&htim2, MotorSetDuty);
+HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -119,12 +121,25 @@ HAL_TIM_PWM_Start(&htim2, MotorSetDuty);
 	  static uint32_t timestamp =0;
 	 	  if(HAL_GetTick()>= timestamp)
 	 	  {
-	 		  timestamp = HAL_GetTick()+500;
-//	 		  averageRisingedgePeriod = IC_Calc_Period();
-	 		  MotorReadRPM = 60/(averageRisingedgePeriod*12*64); //2
-	 		  __HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,MotorSetDuty); //1
+	 		 if(MotorControlEnable == 1){
+	 	  	  if(MotorSetRPM > MotorReadRPM && MotorSetDuty <100){
+	 	  		  MotorSetDuty = MotorSetDuty+1;
+	 	  	  }
+	 	  	  if(MotorSetRPM < MotorReadRPM && MotorSetDuty >0){
+	 	  		  MotorSetDuty = MotorSetDuty -1 ;
+	 	  	  }
+	 	  	 __HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,MotorSetDuty);
+	 		 }
+	 		 if(MotorControlEnable == 0){
+	 		 __HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,MotorSetDuty);
+	 		 }
+	 	 timestamp = HAL_GetTick()+50;
+		  averageRisingedgePeriod = IC_Calc_Period();
+		  MotorReadRPM = 60/(averageRisingedgePeriod*12*64); //2
+		  __HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,MotorSetDuty); //1
 	 	  }
-  }
+ }
+
   /* USER CODE END 3 */
 }
 
@@ -219,7 +234,7 @@ static void MX_TIM2_Init(void)
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 0;
+  sConfigOC.Pulse = 50;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
   if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
@@ -387,7 +402,7 @@ float IC_Calc_Period()
 		sumdiff += NextCapture-fristCapture;
 		i = (i+1)%IC_BUFFER_SIZE;
 	}
-	return (sumdiff/5.0)/1000000;
+	return (sumdiff/5.0)/1000000; //microsec-sec
 }
 /* USER CODE END 4 */
 
